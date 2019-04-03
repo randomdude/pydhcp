@@ -29,6 +29,7 @@ INT = '_int'
 HEX = '_hex'
 IP = '_ip'
 MAC = '_mac'
+ETHERTYPE_MAC = '_ethertype_mac'
 STR = '_str'
 
 DHCP_FIELDS = [
@@ -63,7 +64,7 @@ DHCP_OPTIONS = [
     {'id': 53, 'name': 'operation', 'length': 1, 'type': INT},
     {'id': 54, 'name': 'server_id', 'length': 4, 'type': IP},
     {'id': 55, 'name': 'parameter_request', 'length': 0, 'type': HEX},
-    {'id': 61, 'name': 'client_id', 'length': 6, 'type': MAC},
+    {'id': 61, 'name': 'client_id', 'length': 7, 'type': ETHERTYPE_MAC},
 ]
 
 
@@ -132,9 +133,8 @@ class Encode(object):
 
 class DhcpOption(object):
 
-    def __init__(self, value=None, decode=None, id=None, name=None):
+    def __init__(self, value=None, id=None, name=None):
         self._value = value
-        self._decode = decode
         self.name = name
         self.id = id
         self.length = None
@@ -150,10 +150,38 @@ class DhcpOption(object):
             for k, v in option.items():
                 setattr(self, k, v)
 
+    def setFromRawBytes(self, newBytes):
+        f = getattr(self, self.type + '_set_raw_bytes')
+        f(newBytes)
+
+    def _int_set_raw_bytes(self, newVal):
+       self._value = newVal
+       return
+       if len(newVal) == 1:
+           self._value = struct.unpack('B', newVal)
+       elif len(newVal) == 4:
+           self._value = struct.unpack('I', newVal)
+       else:
+           raise Exception("bad size for option")
+
+    def _ethertype_mac_set_raw_bytes(self, newVal):
+       self._ethertype = struct.unpack('B', newVal[0:1])
+       self._value = newVal[1:]
+
+    def _hex_set_raw_bytes(self, newVal):
+       self._value = newVal
+
+    def _str_set_raw_bytes(self, newVal):
+       print 'string %s' % newVal
+       self._value = newVal
+
     @property
     def value(self):
         f = getattr(self, self.type)
         return f()
+
+#    def _int_set_raw_bytes(self, newVal):
+#        value = int(newval)
 
     def _int(self):
         value = format(self._value, '0%sx' % (2 * self.length))
@@ -164,7 +192,11 @@ class DhcpOption(object):
         return self._tlv_encode(self.id, self.length, value)
 
     def _mac(self):
-        value = value.replace(':', '').lower()
+        value = self._value.replace(':', '').lower()
+        return self._tlv_encode(self.id, self.length, value)
+
+    def _ethertype_mac(self):
+        value = self._value.replace(':', '').lower()
         return self._tlv_encode(self.id, self.length, value)
 
     def _str(self):
@@ -219,24 +251,28 @@ class DhcpOptions(object):
         while(tlv):
             [t] = struct.unpack('B', tlv[0])
             option = DhcpOption(id=t)
-            name = option.name or 'padding'
+            name = option.name or None
+            print 'opt %d: decode %s' % (t, option.name)
 
             if name == 'end':
                 break
 
-            if name == 'padding':
-                tlv = tlv[1:]
-                continue
-
             [length] = struct.unpack('B', tlv[1])
+            print 'len %x' % length
 
             value = tlv[2:2 + length]
             tlv = tlv[2 + length:]
 
+            if name == None:
+                continue
+
+#            print 'raw hexlified %s' % hexlify(value)
+            option.setFromRawBytes(value)
+
             if options.get(name, None):
-                options[name].append(value)
+                options[name].append(option._value)
             else:
-                options[name] = [value]
+                options[name] = [option._value]
 
         for k, v in options.items():
             setattr(self, k, v)
